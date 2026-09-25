@@ -1,0 +1,14 @@
+{
+  "name": "codebase-autopsy",
+  "version": "0.1.0",
+  "description": "Onboarding/drift analysis tool for codebases, built on IBM Bob 2.0 (Bob Shell)",
+  "main": "bin/autopsy.js",
+  "bin": {
+    "autopsy": "bin/autopsy.js"
+  },
+  "scripts": {
+    "start": "node bin/autopsy.js",
+    "start:mock": "BOB_MOCK=true node bin/autopsy.js"
+  },
+  "license": "MIT"
+}
