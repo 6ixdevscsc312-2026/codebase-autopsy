@@ -1,86 +1,108 @@
-# codebase-autopsy
+# Codebase Autopsy
 
-An onboarding/health tool built on **IBM Bob 2.0**'s repo-aware reasoning
-(via Bob Shell). Points it at a codebase and it produces:
+An architectural-drift auditor built on **IBM Bob 2.0**. Points at a
+Python repo and flags modules whose actual behavior no longer matches
+their declared purpose (docstrings) — catching the kind of silent
+tech debt that normally only surfaces the hard way, during onboarding
+or code review.
 
-1. A plain-English read of what the code does and how the pieces fit
-   together (via `bob run --format json`, referencing real files with `@path`)
-2. A **drift score** — how far a README's documented API has diverged
-   from what's actually exported in the source
+Built for the [IBM Bob 2.0 Hackathon](https://lablab.ai/ai-hackathons/ibm-bob-2-hackathon)
+(lablab.ai, Sept 25–27, 2026).
 
-Built for the IBM Bob 2.0 hackathon (lablab, Sept 25–27, 2026).
+See [`PROBLEM_STATEMENT.md`](./PROBLEM_STATEMENT.md) for the problem
+and solution write-up, and [`BOB_USAGE.md`](./BOB_USAGE.md) for exactly
+how IBM Bob 2.0 was used to build and power this project.
 
-## Why this, not a bare API wrapper
+## How it works
 
-Bob Shell is a CLI agent, not just an endpoint — `bob run "<prompt>"`
-reasons over the files you point it at with `@filename` and returns
-structured JSON (`last_message` plus token/cost stats). Using it lets
-`autopsy` show off Bob's actual repo understanding rather than a single
-snippet-in, snippet-out call.
+1. **Ingest** (`autopsy/ingest.py`) — walks the repo, parses every
+   `.py` file with Python's `ast` module, extracts imports, functions,
+   classes, and docstrings.
+2. **Graph** (`autopsy/graph.py`) — builds a module dependency graph,
+   detects import cycles, ranks modules by in/out-degree.
+3. **Bob analysis** (`autopsy/bob_client.py` + `autopsy/main.py`) —
+   for every module with a docstring, asks IBM Bob 2.0 (via Bob Shell's
+   `bob run` CLI) to judge declared purpose vs. observed behavior,
+   returning a 0–10 drift score with evidence.
+4. **Report** — prints a ranked drift report: worst offenders first,
+   plus any import cycles found.
 
 ## Setup
 
 ```bash
-npm install          # no external deps currently, but keeps this future-proof
-export BOB_API_KEY=your_inference_scoped_key
-```
+# 1. Install Bob Shell (the bob CLI)
+curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash
 
-Bob Shell itself (the `bob` binary) needs to be installed locally and on
-`PATH` for real calls. If it isn't found — or if `BOB_MOCK=true` is set —
-`autopsy` automatically falls back to mock mode.
+# 2. Set up credentials
+cp .env.example .env
+# edit .env and paste your Inference-scoped BOB_API_KEY
+export BOB_API_KEY="your-key-here"
+```
 
 ## Usage
 
 ```bash
-node bin/autopsy.js ./path/to/repo
+# Real run, against an actual repo, using live Bob 2.0
+python3 -m autopsy.main /path/to/some/repo
+
+# Offline / no BOB_API_KEY needed (mock mode) — useful for demos
+# or dev without a live Bob Shell install
+python3 -m autopsy.main sample_repo --mock
 ```
 
-Run against the built-in fixture to see it work without any real repo:
+Run it against the included `sample_repo/` fixture (which has an
+intentional import cycle and a docstring/behavior mismatch baked in)
+to see it work out of the box:
 
 ```bash
-node bin/autopsy.js /tmp/fixture   # see lib/ for how the fixture was built
+python3 -m autopsy.main sample_repo --mock
 ```
-
-## Mock mode — how it's honest
-
-Mock mode does **not** fake intelligence. It parses `@path` references
-out of the prompt, actually reads those files off disk, and reports real
-heuristics (line count, rough function/export counts, a content preview).
-This lets prompt construction, JSON parsing, and drift scoring all be
-validated end-to-end without a live Bob install or network access —
-which matters since the dev sandbox here has neither.
-
-## Drift scoring
-
-`lib/driftScore.js` extracts identifier-looking tokens from inline code
-spans in `README.md` (documented API surface) and compares them against
-actual exported/declared symbols in the source files (`module.exports`,
-`exports.x =`, top-level `function`/arrow declarations). The score is:
-
-```
-mismatches / (total_unique_symbols * 2)
-```
-
-`0` = docs and code fully agree. Closer to `1` = meaningful divergence.
-It also lists exactly which symbols are documented-but-missing and
-which are present-but-undocumented, so it's actionable, not just a number.
 
 ## Project layout
 
 ```
-bin/autopsy.js      CLI entry point
-lib/bobClient.js     Shells out to `bob run --format json`, with mock fallback
-lib/mockBob.js       Mock backend that reads real @path files
-lib/driftScore.js    README-vs-source drift scoring
+autopsy/
+  ingest.py      AST-based repo walker -> ModuleInfo per file
+  graph.py       Dependency graph, cycle detection
+  bob_client.py  Wraps `bob run --format json`, with an honest mock mode
+  main.py        Orchestrates ingest -> graph -> Bob analysis -> report
+sample_repo/     Small fixture repo with a real import cycle + drift
+bob_sessions/    Required: screenshots of Bob task session summaries
+tests/           (reserved for test coverage)
 ```
+
+## Mock mode — how it's honest
+
+Mock mode does **not** fake intelligence. `bob_client.py`'s mock path
+actually reads the file(s) referenced via `@path` in the prompt and
+applies a simple, transparent heuristic (does the docstring claim "no
+side effects" while the code contains `open(`, `requests.`, etc.) so
+the rest of the pipeline — prompt construction, JSON parsing, drift
+scoring, reporting — can be built and demoed without a live Bob
+install or network access. It exists to validate the pipeline, not to
+substitute for real Bob reasoning in the final demo/submission.
 
 ## Known limitations (honest, for the demo)
 
-- Symbol extraction is regex-based and JS/TS-oriented — good enough for
-  a 48-hour build, not a real parser (no AST).
-- Drift scoring only looks at `README.md` vs. flat exported symbols —
-  doesn't yet weigh *how* a function is described, just whether it's
-  named.
-- Mock mode's heuristics are intentionally simple; they exist to prove
-  the pipeline works, not to substitute for real Bob reasoning in the
-  final demo.
+- Python/AST-only for now — no multi-language support.
+- Drift detection depends on modules having a docstring to compare
+  against; undocumented modules are skipped (arguably themselves a
+  finding worth surfacing in a future version).
+- Cycle detection is a straightforward DFS — fine for hackathon scale,
+  not optimized for huge monorepos.
+
+## Hackathon submission checklist
+
+- [x] Code repository (this repo)
+- [x] Written problem and solution statement (`PROBLEM_STATEMENT.md`)
+- [x] Written statement on how IBM Bob was used (`BOB_USAGE.md`)
+- [x] Security files from the official IBM Hackathon template
+      (`.gitignore`, `.bobignore`, `.env.example`) — no credentials
+      committed
+- [ ] `bob_sessions/` populated with real task session screenshots
+      (see `bob_sessions/README.md` for how to capture them)
+- [ ] Video demonstration of the solution (≤ 5 min)
+- [ ] Repository made publicly accessible
+- [ ] Submitted via the Project Submission form on your lablab.ai team
+      page (Submission Title, Short Description, Long Description,
+      GitHub link)
